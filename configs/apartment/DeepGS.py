@@ -10,7 +10,7 @@ scene_name = scenes[0]
 set_num_frames = 2519
 map_every = 1
 keyframe_every = 5
-mapping_window_size = 32
+mapping_window_size = 24
 tracking_iters = 60
 mapping_iters = 60
 
@@ -34,10 +34,13 @@ config = dict(
     checkpoint_time_idx=0,
     save_checkpoints=True, # Save Checkpoints
     checkpoint_interval=100, # Checkpoint Interval
-    use_wandb=True,
+    use_wandb=False,
+    mode='train',
+    track = True,
+    GSupdate = False,
     wandb=dict(
         entity="scarick_visualization",
-        project="Splatam",
+        project="DeepGaussian",
         group=group_name,
         name=run_name,
         save_qual=False,
@@ -62,20 +65,22 @@ config = dict(
         use_sil_for_loss=True,
         visualize_tracking_loss=False,
         sil_thres=0.99,
+        # sil_thres=0.00,
         use_l1=True,
         ignore_outlier_depth_loss=False,
         loss_weights=dict(
             im=0.5,
             depth=1.0,
         ),
+        lr=1e-5,
         lrs=dict(
             means3D=0.0,
             rgb_colors=0.0,
             unnorm_rotations=0.0,
             logit_opacities=0.0,
             log_scales=0.0,
-            cam_unnorm_rots=0.001,
-            cam_trans=0.004,
+            cam_unnorm_rots=0.0004,
+            cam_trans=0.002,
         ),
     ),
     mapping=dict(
@@ -98,7 +103,7 @@ config = dict(
             cam_unnorm_rots=0.0000,
             cam_trans=0.0000,
         ),
-        prune_gaussians=True, # Prune Gaussians during Mapping
+        prune_gaussians=False, # Prune Gaussians during Mapping
         pruning_dict=dict( # Needs to be updated based on the number of mapping iterations
             start_after=0,
             remove_big_after=0,
@@ -109,11 +114,56 @@ config = dict(
             reset_opacities=False,
             reset_opacities_every=500, # Doesn't consider iter 0
         ),
-        use_gaussian_splatting_densification=False, # Use Gaussian Splatting-based Densification during Mapping
+        use_gaussian_splatting_densification=True, # Use Gaussian Splatting-based Densification during Mapping
         densify_dict=dict( # Needs to be updated based on the number of mapping iterations
             start_after=500,
             remove_big_after=3000,
             stop_after=75000,
+            densify_every=100,
+            grad_thresh=0.0002,
+            num_to_split_into=2,  # 2
+            removal_opacity_threshold=0.005, # 0.005
+            final_removal_opacity_threshold=0.005,
+            reset_opacities=True,
+            reset_opacities_every=3000, # Doesn't consider iter 0
+        ),
+        # densify_dict=dict( # Needs to be updated based on the number of mapping iterations
+        #     start_after=0,
+        #     remove_big_after=0,
+        #     stop_after=500,
+        #     densify_every=50,
+        #     grad_thresh=0.0002,
+        #     num_to_split_into=2,
+        #     removal_opacity_threshold=0.005,
+        #     final_removal_opacity_threshold=0.005,
+        #     reset_opacities=True,
+        #     reset_opacities_every=300, # Doesn't consider iter 0
+        # )
+    ),
+    train=dict(
+        num_iters_mapping=15000,
+        sil_thres=0.5, # For Addition of new Gaussians & Visualization
+        use_sil_for_loss=True, # Use Silhouette for Loss during Tracking
+        loss_weights=dict(
+            im=0.5,
+            depth=1.0,
+        ),
+        lrs_mapping=dict(
+            means3D=0.00032,
+            rgb_colors=0.0025,
+            unnorm_rotations=0.001,
+            logit_opacities=0.05,
+            log_scales=0.005,
+            cam_unnorm_rots=0.0000,
+            cam_trans=0.0000,
+        ),
+        lrs_mapping_means3D_final=0.0000032,
+        lr_delay_mult=0.01,
+        use_gaussian_splatting_densification=True, # Use Gaussian Splatting-based Densification during Mapping
+        densify_dict=dict( # Needs to be updated based on the number of mapping iterations
+            start_after=500,
+            remove_big_after=3000,
+            stop_after=15000,
             densify_every=100,
             grad_thresh=0.0002,
             num_to_split_into=2,  # 2

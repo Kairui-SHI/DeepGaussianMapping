@@ -639,7 +639,6 @@ def rgbd_slam(config: dict):
                 keyframe_list.append(curr_keyframe)
     else:
         checkpoint_time_idx = 0
-    
     # Iterate over Scan
     for time_idx in tqdm(range(checkpoint_time_idx, num_frames)):
         # Load RGBD frames incrementally instead of all frames
@@ -959,7 +958,7 @@ def rgbd_slam(config: dict):
                        "Final Stats/Average Mapping Frame Time (s)": mapping_frame_time_avg,
                        "Final Stats/step": 1})
     
-    Evaluate Final Parameters
+    # Evaluate Final Parameters
     with torch.no_grad():
         if config['use_wandb']:
             eval(dataset, params, num_frames, eval_dir, sil_thres=config['mapping']['sil_thres'],

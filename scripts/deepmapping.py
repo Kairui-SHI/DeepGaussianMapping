@@ -15,7 +15,7 @@ from init_pose import w2c_to_c2w
 from utils.group_matrix_generate import distance_cal
 from utils.vis_2dpose import vis_pcd
 
-def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_for_loss,
+def get_loss(params, curr_data, iter_time_idx, loss_weights, use_sil_for_loss,
              sil_thres, use_l1, ignore_outlier_depth_loss, tracking = True):
     # Initialize Loss Dictionary
     losses = {}
@@ -29,7 +29,7 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
     # RGB Rendering
     rendervar['means2D'].retain_grad()
     im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
-    variables['means2D'] = rendervar['means2D']  # Gradient only accum from colour render for densification
+    # variables['means2D'] = rendervar['means2D']  # Gradient only accum from colour render for densification
 
     # Depth & Silhouette Rendering
     depth_sil, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
@@ -62,25 +62,25 @@ def get_loss(params, curr_data, variables, iter_time_idx, loss_weights, use_sil_
             losses['depth'] = torch.abs(curr_data['depth'] - depth)[mask].mean()
     
     # RGB Loss
-    losses['im'] = torch.abs(curr_data['im'] - im).sum()
-    # if tracking and (use_sil_for_loss or ignore_outlier_depth_loss):
-    #     color_mask = torch.tile(mask, (3, 1, 1))
-    #     color_mask = color_mask.detach()
-    #     losses['im'] = torch.abs(curr_data['im'] - im)[color_mask].sum()
-    # elif tracking:
-    #     losses['im'] = torch.abs(curr_data['im'] - im).sum()
-    # else:
-    #     losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
+    # losses['im'] = torch.abs(curr_data['im'] - im).sum()
+    if tracking and (use_sil_for_loss or ignore_outlier_depth_loss):
+        color_mask = torch.tile(mask, (3, 1, 1))
+        color_mask = color_mask.detach()
+        losses['im'] = torch.abs(curr_data['im'] - im)[color_mask].sum()
+    elif tracking:
+        losses['im'] = torch.abs(curr_data['im'] - im).sum()
+    else:
+        losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
 
     weighted_losses = {k: v * loss_weights[k] for k, v in losses.items()}
     loss = sum(weighted_losses.values())
 
-    seen = radius > 0
-    variables['max_2D_radius'][seen] = torch.max(radius[seen], variables['max_2D_radius'][seen])
-    variables['seen'] = seen
+    # seen = radius > 0
+    # variables['max_2D_radius'][seen] = torch.max(radius[seen], variables['max_2D_radius'][seen])
+    # variables['seen'] = seen
     weighted_losses['loss'] = loss
 
-    return loss, weighted_losses#, variables
+    return loss
 
 
 class DeepMapping2(nn.Module):
@@ -101,7 +101,7 @@ class DeepMapping2(nn.Module):
         # self.beta = beta
        
 
-    def forward(self, obs_local, params, group_matrix, group_data=None, variables=None, loss_init=10, flag=True):
+    def forward(self, obs_local, params, group_matrix, group_data=None, variables=None, loss_init=10, flag=True,  params_init=None):
         # obs_local: <Group x Number x 3> 
 
         # get sensor_pose : G * 7
@@ -129,54 +129,52 @@ class DeepMapping2(nn.Module):
             self.pose_est =  torch.cat((xyz, wxyz), dim=1).view(original_shape)
         elif self.rotation == 'euler_angle':
             self.pose_est = self.l_net_out + sensor_pose
-        # l_net_out[:, -1] = 0
-        # self.pose_est = cat_pose_KITTI(sensor_pose, self.loc_net(self.obs_initial))
-        # self.bs = obs_local.shape[0]
-        # self.obs_local = self.obs_local.reshape(self.bs,-1,3)
 
         self.obs_global_est = transform_to_global_KITTI(
             self.pose_est, self.obs_local, rotation_representation=self.rotation)
     
         # pose_est= G*7 -> params
-        self.params_est = {k: v.clone() for k, v in params.items()}
+        self.params = {k: v.clone() for k, v in params.items()}
         for i in range(len(group_matrix)):
-            self.params_est['cam_unnorm_rots'][..., group_matrix[i]] = self.pose_est[i, 3:].float() #quaternion_rot 1*4
-            self.params_est['cam_trans'][..., group_matrix[i]] = self.pose_est[i, :3].float() #quaternion_tran 1*3
+            self.params['cam_unnorm_rots'][..., group_matrix[i]] = self.pose_est[i, 3:].float() #quaternion_rot 1*4
+            self.params['cam_trans'][..., group_matrix[i]] = self.pose_est[i, :3].float() #quaternion_tran 1*3
 
-        if not self.training:
-            self.pose_est = self.pose_est[0].float()
-            # loss = 0 # est_pose loss
-            # loss_est_list = []
-            # for i in range(len(group_matrix)):
-            #     loss, losses = get_loss(self.params_est, group_data[i], variables, group_matrix[i], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
-            #     loss_est_list.append(loss)
-            # loss_est = sum(loss_est_list)/len(loss_est_list)*1e-1
-            # print(loss_est)
+        # if not self.training:
+        #     self.pose_est = self.pose_est[0].float()
+        #     rel_w2c = group_data[0]['iter_gt_w2c_list'][-1]
+        #     rel_w2c_rot = rel_w2c[:3, :3].unsqueeze(0)
+        #     rel_w2c_rot_quat = matrix_to_quaternion(rel_w2c_rot)
+        #     rel_w2c_tran = rel_w2c[:3, 3].detach()
+        #     params_gt = {k: v.clone() for k, v in params.items()}
+        #     params_gt['cam_unnorm_rots'][..., group_matrix[0]] = rel_w2c_rot_quat.float() #quaternion_rot 1*4
+        #     params_gt['cam_trans'][..., group_matrix[0]] = rel_w2c_tran.float() #quaternion_tran 1*3
 
-            # loss = 0 # init_pose loss
-            # loss_list = []
-            # for i in range(len(group_matrix)):
-            #     loss, losses = get_loss(params, group_data[i], variables, group_matrix[i], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
-            #     loss_list.append(loss)
-            # loss = sum(loss_list)/len(loss_list)*1e-1
-            # print(loss)
-
-            # return loss_est, loss
+        #     loss_est = get_loss(self.params_est, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+        #     loss = get_loss(params, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+        #     loss_gt = get_loss(params_gt, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+        #     print(loss_est)
+        #     print(loss)
+        #     print(loss_gt)
+        #     # return loss_est, loss
 
         if self.training: # Get Loss: Gaussians  
             loss = 0
             loss_ = []
+            # for i in range(len(group_matrix)):
             for i in range(len(group_matrix)):
-                loss, losses = get_loss(self.params_est, group_data[i], variables, group_matrix[i], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+                loss = get_loss(self.params, group_data[i], group_matrix[i], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
                 loss_.append(loss)
                 # torch.cuda.empty_cache()
-            loss = sum(loss_)/len(loss_)*1e-1
+            loss = (sum(loss_)/len(group_matrix))
             print(loss)
+            if params_init is not None:
+                loss_init = get_loss(params_init, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+                print(loss_init)
 
-            threshold = 0.1
+            # threshold = 0.1
             loss_init_ = []
             for i in range(len(group_matrix)):
-                distance = torch.abs(sensor_pose[i, :3] - self.pose_est[i, :3]).sum() + torch.abs(sensor_pose[i, 3:] - self.pose_est[i, 3:]).sum()
+                distance = torch.abs(sensor_pose[i, :3] - self.pose_est[i, :3]).sum()# + torch.abs(sensor_pose[i, 3:] - self.pose_est[i, 3:]).sum()
                 # distance = distance_cal(self.pose_est[i], sensor_pose[i])
                 loss_init_.append(distance)
             loss_init = sum(loss_init_) / len(loss_init_)

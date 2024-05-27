@@ -405,9 +405,8 @@ def eval_online(dataset, all_params, num_frames, eval_online_dir, sil_thres,
         wandb_run.log({"Online Eval/Metrics": fig})
     plt.close()
 
-
-def eval(dataset, final_params, num_frames, eval_dir, sil_thres, 
-         mapping_iters, add_new_gaussians, wandb_run=None, wandb_save_qual=False, eval_every=1, save_frames=False):
+def eval_psnr(dataset, final_params, num_frames, eval_dir, sil_thres, 
+         mapping_iters, add_new_gaussians, wandb_run=None, wandb_save_qual=False, eval_every=1, save_frames=False, group_matrix=None):
     print("Evaluating Final Parameters ...")
     psnr_list = []
     rmse_list = []
@@ -488,6 +487,125 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
         psnr_list.append(psnr.cpu().numpy())
         ssim_list.append(ssim.cpu().numpy())
         lpips_list.append(lpips_score)
+
+    # draw local psnr plot
+    if group_matrix is not None:
+        local_psnr_list = []
+        for idx in tqdm(range(num_frames)):
+            # Skip frames if not eval_every
+            if time_idx != 0 and (time_idx+1) % eval_every != 0:
+                continue
+
+            local_psnr = psnr_list[int(group_matrix[idx, 0])]*2
+            for f_id in range(1, group_matrix.shape[1]):
+                local_psnr += psnr_list[int(group_matrix[idx, f_id])]
+            local_psnr = local_psnr / group_matrix.shape[1]
+            local_psnr_list.append(local_psnr)
+        return local_psnr_list
+    else:
+        print("Error: group_matrix size is larger than num_frames")
+        return None
+  
+
+def eval(dataset, final_params, num_frames, eval_dir, sil_thres, 
+         mapping_iters, add_new_gaussians, wandb_run=None, wandb_save_qual=False, eval_every=1, save_frames=False, group_matrix=None):
+    print("Evaluating Final Parameters ...")
+    psnr_list = []
+    rmse_list = []
+    l1_list = []
+    lpips_list = []
+    ssim_list = []
+    plot_dir = os.path.join(eval_dir, "plots")
+    os.makedirs(plot_dir, exist_ok=True)
+    if save_frames:
+        render_rgb_dir = os.path.join(eval_dir, "rendered_rgb")
+        os.makedirs(render_rgb_dir, exist_ok=True)
+        render_depth_dir = os.path.join(eval_dir, "rendered_depth")
+        os.makedirs(render_depth_dir, exist_ok=True)
+        rgb_dir = os.path.join(eval_dir, "rgb")
+        os.makedirs(rgb_dir, exist_ok=True)
+        depth_dir = os.path.join(eval_dir, "depth")
+        os.makedirs(depth_dir, exist_ok=True)
+
+    gt_w2c_list = []
+    for time_idx in tqdm(range(num_frames)):
+         # Get RGB-D Data & Camera Parameters
+        color, depth, intrinsics, pose = dataset[time_idx]
+        gt_w2c = torch.linalg.inv(pose)
+        gt_w2c_list.append(gt_w2c)
+        intrinsics = intrinsics[:3, :3]
+
+        # Process RGB-D Data
+        color = color.permute(2, 0, 1) / 255 # (H, W, C) -> (C, H, W)
+        depth = depth.permute(2, 0, 1) # (H, W, C) -> (C, H, W)
+
+        if time_idx == 0:
+            # Process Camera Parameters
+            first_frame_w2c = torch.linalg.inv(pose)
+            # Setup Camera
+            cam = setup_camera(color.shape[2], color.shape[1], intrinsics.cpu().numpy(), first_frame_w2c.detach().cpu().numpy())
+        
+        # Skip frames if not eval_every
+        if time_idx != 0 and (time_idx+1) % eval_every != 0:
+            continue
+
+        # Get current frame Gaussians
+        transformed_gaussians = transform_to_frame(final_params, time_idx, 
+                                                   gaussians_grad=False, 
+                                                   camera_grad=False)
+ 
+        # Define current frame data
+        curr_data = {'cam': cam, 'im': color, 'depth': depth, 'id': time_idx, 'intrinsics': intrinsics, 'w2c': first_frame_w2c}
+
+        # Initialize Render Variables
+        rendervar = transformed_params2rendervar(final_params, transformed_gaussians)
+        depth_sil_rendervar = transformed_params2depthplussilhouette(final_params, curr_data['w2c'],
+                                                                     transformed_gaussians)
+
+        # Render Depth & Silhouette
+        depth_sil, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
+        rastered_depth = depth_sil[0, :, :].unsqueeze(0)
+        # Mask invalid depth in GT
+        valid_depth_mask = (curr_data['depth'] > 0)
+        rastered_depth_viz = rastered_depth.detach()
+        rastered_depth = rastered_depth * valid_depth_mask
+        silhouette = depth_sil[1, :, :]
+        presence_sil_mask = (silhouette > sil_thres)
+        
+        # Render RGB and Calculate PSNR
+        im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
+        if mapping_iters==0 and not add_new_gaussians:
+            weighted_im = im * presence_sil_mask * valid_depth_mask
+            weighted_gt_im = curr_data['im'] * presence_sil_mask * valid_depth_mask
+        else:
+            weighted_im = im * valid_depth_mask
+            weighted_gt_im = curr_data['im'] * valid_depth_mask
+        psnr = calc_psnr(weighted_im, weighted_gt_im).mean()
+        ssim = ms_ssim(weighted_im.unsqueeze(0).cpu(), weighted_gt_im.unsqueeze(0).cpu(), 
+                        data_range=1.0, size_average=True)
+        lpips_score = loss_fn_alex(torch.clamp(weighted_im.unsqueeze(0), 0.0, 1.0),
+                                    torch.clamp(weighted_gt_im.unsqueeze(0), 0.0, 1.0)).item()
+
+        psnr_list.append(psnr.cpu().numpy())
+        ssim_list.append(ssim.cpu().numpy())
+        lpips_list.append(lpips_score)
+
+        # draw local psnr plot
+        if group_matrix is not None:
+            local_psnr_list = []
+            for idx in range(len(num_frames)):
+                local_psnr = psnr_list[group_matrix[idx, 0]]*2
+                for f_id in range(1, group_matrix.shape[1]):
+                    local_psnr += psnr_list[group_matrix[idx, f_id]]
+                local_psnr = local_psnr / group_matrix.shape[1]
+                local_psnr_list.append(local_psnr)
+            plt.figure()
+            plt.plot(local_psnr_list)
+            plt.title("Local-PSNR")
+            plt.xlabel("Frame")
+            plt.ylabel("PSNR")
+            plt.savefig(os.path.join(plot_dir, "local_psnr.png"))
+            plt.close()
 
         # Compute Depth RMSE
         if mapping_iters==0 and not add_new_gaussians:

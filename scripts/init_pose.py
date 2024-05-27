@@ -120,10 +120,38 @@ def w2c_to_c2w(location):
 
     return c2w_pose
 
-# location = np.load("/mnt/massive/skr/SplaTAM/pcd_save/apartment_0/Lnet_pose_est.npy")
+def reference_trans(location):
+    first_c2w_trans = location[0, :3]
+    first_c2w_quat = location[0, 3:]
+    first_c2w_rot = build_rotation(F.normalize(first_c2w_quat.reshape(1,4)))
+    transformation = torch.eye(4).cuda().float()
+    transformation[:3,:3] = first_c2w_rot
+    transformation[:3,3] = first_c2w_trans
+    transformation = torch.inverse(transformation)
+
+    reference_trans_pose = torch.empty(location.shape[0], 7)
+    c2w = torch.eye(4).cuda().float()
+    for idx in range(location.shape[0]):
+        c2w_trans = location[idx, :3]
+        c2w_quat = location[idx, 3:]
+        c2w_rot = build_rotation(F.normalize(c2w_quat.reshape(1,4)))
+        c2w[:3,:3] =  c2w_rot
+        c2w[:3,3] = c2w_trans
+
+        reference_trans_matrix = transformation @ c2w
+        quat_rot = matrix_to_quaternion(reference_trans_matrix[:3,:3]).reshape(1,4)
+        quat_tran = reference_trans_matrix[:3, 3].detach().reshape(1,3)
+        pose = torch.cat((quat_tran, quat_rot), dim=1)
+        reference_trans_pose[idx] = pose
+
+    return reference_trans_pose
+
+# location = np.load("/mnt/massive/skr/SplaTAM/pcd_save/apartment_0/Lnet_est_pose_00.npy")
 # location = torch.from_numpy(location)
 # location = w2c_to_c2w(location)
-# np.save("/mnt/massive/skr/SplaTAM/pcd_save/apartment_0/c2w_Lnet_pose_est.npy", location)
+# location = reference_trans(location)
+# print(location[0])
+# np.save("/mnt/massive/skr/SplaTAM/pcd_save/apartment_0/reference_trans_pose_00.npy", location)
 
 # params = np.load('/mnt/massive/skr/SplaTAM/experiments/Apartment/Post_SplaTAM_Opt/params.npz', allow_pickle=True)
 # print(params)

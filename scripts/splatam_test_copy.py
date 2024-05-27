@@ -28,7 +28,7 @@ from datasets.gradslam_datasets import (load_dataset_config, ICLDataset, Replica
                                         ScannetDataset, Ai2thorDataset, Record3DDataset, RealsenseDataset, TUMDataset,
                                         ScannetPPDataset, NeRFCaptureDataset)
 from utils.common_utils import seed_everything, save_params_ckpt, save_params
-from utils.eval_helpers import report_loss, report_progress, eval
+from utils.eval_helpers import report_loss, report_progress, eval, eval_psnr
 from utils.keyframe_selection import keyframe_selection_overlap
 from utils.recon_helpers import setup_camera
 from utils.slam_helpers import (
@@ -678,9 +678,10 @@ def rgbd_slam(config: dict):
         # params = dict(np.load(ckpt_path, allow_pickle=True))
         # load_path = os.path.join(config['workdir'], config['run_name'], f"params.npz")
         # params = dict(np.load(load_path, allow_pickle=True))    # gt gaussian
-        # params = dict(np.load("/mnt/massive/skr/SplaTAM/pcd_save/apartment_0/params.npz", allow_pickle=True)) # update gs
-        params = dict(np.load("/mnt/massive/skr/SplaTAM/experiments/Apartment/Post_SplaTAM_Opt/params.npz", allow_pickle=True))
+        params = dict(np.load("/mnt/massive/skr/SplaTAM/experiments/Replica/room0_0/params2000.npz", allow_pickle=True))
+        # params = dict(np.load("/mnt/massive/skr/SplaTAM/experiments/Apartment/Post_SplaTAM_Opt/params.npz", allow_pickle=True))
         params = {k: torch.tensor(params[k]).cuda().float().requires_grad_(True) for k in params.keys()}
+        params_init = {k: v.clone().detach().requires_grad_(True) for k, v in params.items()}
         # params_mean3D = dict(np.load('/mnt/massive/skr/SplaTAM/experiments/Apartment/Post_SplaTAM_Opt/params.npz', allow_pickle=True))
         # params_mean3D = {k: torch.tensor(params_mean3D[k]).cuda().float().requires_grad_(True) for k in params_mean3D.keys()}
         # params['means3D'] = params_mean3D['means3D']
@@ -736,27 +737,29 @@ def rgbd_slam(config: dict):
     # full_group_matrix = group_matrix_generate(params, num_frames)
     # # Save as npy
     # np.save(f"./pcd_save/{config['run_name']}/full_group_matrix_2519.npy", full_group_matrix)
-    full_group_matrix = np.load(f"./pcd_save/{config['run_name']}/full_group_matrix_2519.npy")
+    full_group_matrix = np.load(f"./pcd_save/{config['run_name']}/full_group_matrix.npy")
     print('full_group_matrix:', full_group_matrix.shape)
 
-    print('load model')
-    save_dir = os.path.join('./pcd_save', config['run_name'], f"better_model_2519_6iter.pth")
-    checkpoint = torch.load(save_dir)
-    model.load_state_dict(checkpoint['state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer'])
 
-    if (mode == 'eval'):
+    if (mode == 'train'):
         print('load model')
-        save_dir = './pcd_save/better_model_pretrain_00.pth'
+        # save_dir = os.path.join('./pcd_save', config['run_name'], f"better_model_2519_6iter.pth")
+        save_dir = os.path.join('./pcd_save', config['run_name'], f"better_model_12.pth")
         checkpoint = torch.load(save_dir)
         model.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
+    # elif (mode == 'eval'):
+    #     print('load model')
+    #     save_dir = os.path.join('./pcd_save', config['run_name'], f"better_model_21.pth")
+    #     checkpoint = torch.load(save_dir)
+    #     model.load_state_dict(checkpoint['state_dict'])
+    #     optimizer.load_state_dict(checkpoint['optimizer'])
 
     # Iterate over Scan
     if mode == 'train':
         if track:
             for epoch in tqdm(range(n_epochs)):
-                pose_est = []
+                Lnet_pose_est = []
                 for time_idx in tqdm(range(checkpoint_time_idx, num_frames)):
                     # Load RGBD frames incrementally instead of all frames
                     color, depth, _, gt_pose = dataset[time_idx]
@@ -830,83 +833,43 @@ def rgbd_slam(config: dict):
                         lr_change = 1
                         loss_ = []
                         model.train()
-                        if time_idx == 1 and epoch == -1:
-                            for init_epoch in tqdm(range(100)):
-                                loss_init, flag, loss = model(obs_local, params, group_matrix, group_data, variables, loss_init=loss_init, flag=flag)
-                                loss_.append(loss.detach().cpu().numpy())
-                                # if flag == 1:
-                                #     lr_change = lr_change + 1
-                                #     optimizer = optim.Adam(model.parameters(),lr=lr_change*1e-6)
-                                #     print('lr change!  ', lr_change*5e-5)
-                                #     if lr_change == 10:
-                                #         lr_change = 1
-                                #         flag = 2
-                               
-                                if not torch.isnan(loss) and flag == 0:
-                                    optimizer = optim.Adam(model.parameters(),lr=3e-4)
-                                if not torch.isnan(loss) and flag == 1:
-                                    if loss < 1e4:
-                                        optimizer = optim.Adam(model.parameters(),lr=1e-6)
-                                    # elif loss < 2.0e5:
-                                    #     optimizer = optim.Adam(model.parameters(),lr=1*1e-5)
-                                    else:
-                                        optimizer = optim.Adam(model.parameters(),lr=1e-5)
-                                print('loss:', float(loss))
 
-                                optimizer.zero_grad()
-                                loss.backward()
-                                optimizer.step()
-                        else:
-                            for pre_epoch in tqdm(range(5)):
-                                loss_init, flag, loss = model(obs_local, params, group_matrix, group_data, variables, loss_init=loss_init, flag=flag)
-                                # if not torch.isnan(loss_init):
-                                #     optimizer = optim.Adam(model.parameters(),lr=2*1e-9*float(loss))
+                        for iter in tqdm(range(5)):
+                            loss_init, flag, loss = model(obs_local, params, group_matrix, group_data, variables, loss_init=loss_init, flag=flag, params_init=params_init)
+                            # if not torch.isnan(loss_init):
+                            #     optimizer = optim.Adam(model.parameters(),lr=2*1e-9*float(loss))
 
-                                if not torch.isnan(loss) and flag == 0: #apartment
-                                    optimizer = optim.Adam(model.parameters(),lr=3e-4)
-                                if not torch.isnan(loss) and flag == 1:
-                                    if loss < 1e4:
-                                        optimizer = optim.Adam(model.parameters(),lr=1e-7)
-                                    # elif loss < 2.0e5:
-                                    #     optimizer = optim.Adam(model.parameters(),lr=1*1e-5)
-                                    else:
-                                        optimizer = optim.Adam(model.parameters(),lr=1e-6)
+                            if not torch.isnan(loss) and flag == 0: #apartment
+                                optimizer = optim.Adam(model.parameters(),lr=3e-4)
+                            if not torch.isnan(loss) and flag == 1:
+                                # optimizer = optim.Adam(model.parameters(),lr=1e-5)
+                                optimizer = optim.Adam(model.parameters(),lr=config['tracking']['lr'])
 
-                                # if not torch.isnan(loss): #replica
-                                #     if loss < 1e4:
-                                #         optimizer = optim.Adam(model.parameters(),lr=1*1e-6)
-                                #     else:
-                                #         optimizer = optim.Adam(model.parameters(),lr=3e-4)
-                                
-                                # if not torch.isnan(loss):
-                                #     if loss < 1e4:
-                                #         optimizer = optim.Adam(model.parameters(),lr=1*1e-9)
-                                #     elif loss < 2.0e5:
-                                #         optimizer = optim.Adam(model.parameters(),lr=1*1e-8)
-                                #     else:
-                                #         optimizer = optim.Adam(model.parameters(),lr=1e-7)
+                            with torch.no_grad():
+                                pose_est = model.pose_est
+                                Lnet_pose_est.append(pose_est[0].detach().cpu().numpy())
+                                # params['cam_unnorm_rots'][..., group_matrix[0]] = pose_est[0, 3:].float() 
+                                # params['cam_trans'][..., group_matrix[0]] = pose_est[0, :3].float()
 
-                                optimizer.zero_grad()
-                                loss.backward()
-                                optimizer.step()
+                            optimizer.zero_grad()
+                            loss.backward()
+                            optimizer.step()
                             print(f'frame{time_idx} loss:', float(loss))
                             # if time_idx % 100 == 0:
-                            #     torch.cuda.empty_cache()
-                        # if loss_init < 100:
-                        #     break
-                            # with torch.no_grad():
-                            #         model.eval()
-                            #         model(obs_local, params, group_matrix)
-                            #         pose_est.append(model.pose_est.cpu().numpy())
-                            #         print(pose_est[-1])
+                                # torch.cuda.empty_cache()
 
-                # save L-net model
+                # save L-net model & Est_poses
                 save_dir = os.path.join('./pcd_save', config['run_name'], f"better_model_{epoch:02}.pth")
                 state = {'state_dict': model.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     "epoch": epoch}
                 torch.save(state, save_dir)
                 print('model saved to {}'.format(save_dir))
+
+                # save Est_poses
+                save_est_dir = os.path.join('./pcd_save', config['run_name'], f"Lnet_est_pose_{epoch:02}.npy")
+                np.save(save_est_dir, Lnet_pose_est)
+                print('Est_poses saved to {}'.format(save_est_dir))
         
 
         if GSupdate:
@@ -954,7 +917,7 @@ def rgbd_slam(config: dict):
                 # with torch.no_grad():
                 model.eval()
                 # loss_est, loss = model(obs_local, params, group_matrix, group_data, variables)
-                model(obs_local, params, group_matrix, group_data, variables)
+                model(obs_local, params, group_matrix=group_matrix, group_data=group_data)
                 # loss_est_list.append(loss_est.detach().cpu().numpy())
                 # loss_list.append(loss.detach().cpu().numpy())
                 # model(obs_local, params, group_matrix)
@@ -1252,123 +1215,143 @@ def rgbd_slam(config: dict):
     
 
     elif mode == 'eval':
-        Lnet_pose_est = []
-        pcd_init = o3d.geometry.PointCloud()
-        pcd_gt = o3d.geometry.PointCloud()
-        pcd_est = o3d.geometry.PointCloud()
-        pcd_temp = o3d.geometry.PointCloud()
-        Lnet_pose = np.load("./pcd_save/Lnet_pose_est.npy")
-        gt_pose = np.load("./pcd_save/replica/pcd/gt_pose.npy")
-        init_pose = np.load("./pcd_save/replica/prior/init_pose.npy")
-        for test_time_idx in tqdm(range(0, num_frames)):
-            # TODO: L-net Gaussian method:
-            temp_pcd = []
-            obs_local = []
-            true_pcd = []
-            group_matrix = [test_time_idx]
-            for i in group_matrix:
-                temp_pcd = get_Lnet_data(dataset, i, config['scene_radius_depth_ratio'], config['mean_sq_dist_method'])
-                true_pcd.append(temp_pcd)
-                if(temp_pcd.shape[0] > max_num_pcd):
-                    temp_pcd = temp_pcd[:max_num_pcd]
-                elif(temp_pcd.shape[0] < max_num_pcd):
-                    temp_pcd = np.pad(temp_pcd, ((0, max_num_pcd-temp_pcd.shape[0]), (0, 0)))
-                # print(temp_pcd.shape)
-                obs_local.append(temp_pcd)
-            true_pcd = torch.from_numpy(np.stack(true_pcd)).float().to(device)
-            obs_local = torch.from_numpy(np.stack(obs_local)).float().to(device)
-            # print(obs_local.shape)
+        params_est = {k: v.clone() for k, v in params.items()}
+        # Lnet_pose_est = []
+        # pcd_init = o3d.geometry.PointCloud()
+        # pcd_gt = o3d.geometry.PointCloud()
+        # pcd_est = o3d.geometry.PointCloud()
+        # pcd_temp = o3d.geometry.PointCloud()
+        # # Lnet_pose = np.load("./pcd_save/Lnet_pose_est.npy")
+        # # gt_pose = np.load("./pcd_save/replica/pcd/gt_pose.npy")
+        # # init_pose = np.load("./pcd_save/replica/prior/init_pose.npy")
+        # for test_time_idx in tqdm(range(0, num_frames)):
+        #     # TODO: L-net Gaussian method:
+        #     temp_pcd = []
+        #     obs_local = []
+        #     true_pcd = []
+        #     group_matrix = [test_time_idx]
+        #     group_data = []
+        #     for idx in range(len(group_matrix)):
+        #         # Load RGBD frames incrementally instead of all frames
+        #         frame_id = group_matrix[idx]
+        #         color, depth, _, gt_pose = dataset[frame_id]
+        #         # Process poses
+        #         gt_w2c = torch.linalg.inv(gt_pose)
+        #         # Process RGB-D Data
+        #         color = color.permute(2, 0, 1) / 255
+        #         depth = depth.permute(2, 0, 1)
+        #         gt_w2c_all_frames.append(gt_w2c)
+        #         curr_gt_w2c = gt_w2c_all_frames
+        #         # Optimize only current time step for tracking
+        #         iter_time_idx = frame_id
+        #         # Initialize Mapping Data for selected frame
+        #         curr_data = {'cam': cam, 'im': color, 'depth': depth, 'id': iter_time_idx, 'intrinsics': intrinsics, 'w2c': first_frame_w2c, 'iter_gt_w2c_list': curr_gt_w2c}
+        #         group_data.append(curr_data)
+        #     for i in group_matrix:
+        #         temp_pcd = get_Lnet_data(dataset, i, config['scene_radius_depth_ratio'], config['mean_sq_dist_method'])
+        #         true_pcd.append(temp_pcd)
+        #         if(temp_pcd.shape[0] > max_num_pcd):
+        #             temp_pcd = temp_pcd[:max_num_pcd]
+        #         elif(temp_pcd.shape[0] < max_num_pcd):
+        #             temp_pcd = np.pad(temp_pcd, ((0, max_num_pcd-temp_pcd.shape[0]), (0, 0)))
+        #         # print(temp_pcd.shape)
+        #         obs_local.append(temp_pcd)
+        #     true_pcd = torch.from_numpy(np.stack(true_pcd)).float().to(device)
+        #     obs_local = torch.from_numpy(np.stack(obs_local)).float().to(device)
+        #     # print(obs_local.shape)
 
-            with torch.no_grad():
-                model.eval()
-                model(obs_local, params, group_matrix)
-                Lnet_pose_est.append(model.pose_est.cpu().numpy())
-                print(Lnet_pose_est[-1])
+        #     model.eval()
+        #     model(obs_local, params, group_matrix=group_matrix, group_data=group_data)
+        #     with torch.no_grad():
+        #         est_pose = model.pose_est # w2c
+        #         Lnet_pose_est.append(est_pose.detach().cpu().numpy())
+        #         params_est['cam_unnorm_rots'][..., test_time_idx] = est_pose[3:]
+        #         params_est['cam_trans'][..., test_time_idx] = est_pose[:3]
+        #         print(Lnet_pose_est[-1])
 
-            # save init pcd ...
-            pose = torch.tensor(init_pose[test_time_idx]).to('cuda').unsqueeze(0)
-            obs_global_est = transform_to_global_KITTI(pose, true_pcd, 'quaternion')
-            obs_global_est = np.squeeze(obs_global_est.cpu().detach().numpy())
-            pcd_temp.points = o3d.utility.Vector3dVector(obs_global_est)
-            # pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.05)
-            pcd_init += pcd_temp
+        #     # # save init pcd ...
+        #     # pose = torch.tensor(init_pose[test_time_idx]).to('cuda').unsqueeze(0)
+        #     # obs_global_est = transform_to_global_KITTI(pose, true_pcd, 'quaternion')
+        #     # obs_global_est = np.squeeze(obs_global_est.cpu().detach().numpy())
+        #     # pcd_temp.points = o3d.utility.Vector3dVector(obs_global_est)
+        #     # # pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.05)
+        #     # pcd_init += pcd_temp
 
-            # # save gt pcd ...
-            # pose = torch.tensor(gt_pose[test_time_idx]).to('cuda').unsqueeze(0)
-            # obs_global_est = transform_to_global_KITTI(pose, true_pcd, 'quaternion')
-            # obs_global_est = np.squeeze(obs_global_est.cpu().detach().numpy())
-            # pcd_temp.points = o3d.utility.Vector3dVector(obs_global_est)
-            # # pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.05)
-            # pcd_gt += pcd_temp
+        #     # # save gt pcd ...
+        #     # pose = torch.tensor(gt_pose[test_time_idx]).to('cuda').unsqueeze(0)
+        #     # obs_global_est = transform_to_global_KITTI(pose, true_pcd, 'quaternion')
+        #     # obs_global_est = np.squeeze(obs_global_est.cpu().detach().numpy())
+        #     # pcd_temp.points = o3d.utility.Vector3dVector(obs_global_est)
+        #     # # pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.05)
+        #     # pcd_gt += pcd_temp
 
-            # # save est pcd ...
-            # pose = torch.tensor(Lnet_pose[test_time_idx]).to('cuda').unsqueeze(0)
-            # obs_global_est = transform_to_global_KITTI(pose, true_pcd, 'quaternion')
-            # obs_global_est = np.squeeze(obs_global_est.cpu().detach().numpy())
-            # pcd_temp.points = o3d.utility.Vector3dVector(obs_global_est)
-            # # pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.05)
-            # pcd_est += pcd_temp
+        #     # # save est pcd ...
+        #     # pose = torch.tensor(Lnet_pose[test_time_idx]).to('cuda').unsqueeze(0)
+        #     # obs_global_est = transform_to_global_KITTI(pose, true_pcd, 'quaternion')
+        #     # obs_global_est = np.squeeze(obs_global_est.cpu().detach().numpy())
+        #     # pcd_temp.points = o3d.utility.Vector3dVector(obs_global_est)
+        #     # # pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.05)
+        #     # pcd_est += pcd_temp
 
-        o3d.io.write_point_cloud('./pcd_save/init_pcd.ply', pcd_init)
-        o3d.io.write_point_cloud('./pcd_save/Lnet_pcd_est.ply', pcd_est)
-        o3d.io.write_point_cloud('./pcd_save/gt_pcd.ply', pcd_gt)
-        Lnet_pose_est = np.stack(Lnet_pose_est)
-        Lnet2pose(Lnet_pose_est) # change pose_est from w2c to c2w and save as .npy
-        # np.save("./pcd_save/Lnet_pose_est.npy", pose_est)
+        # # o3d.io.write_point_cloud('./pcd_save/init_pcd.ply', pcd_init)
+        # # o3d.io.write_point_cloud('./pcd_save/Lnet_pcd_est.ply', pcd_est)
+        # # o3d.io.write_point_cloud('./pcd_save/gt_pcd.ply', pcd_gt)
+        # Lnet_pose_est = np.stack(Lnet_pose_est)
+        # Lnet2pose(Lnet_pose_est) # change pose_est from w2c to c2w and save as .npy
+        # # save Lnet_pose_est & loss list
+        # np.save(f"./pcd_save/{config['run_name']}/c2w_Lnet_pose_est.npy", Lnet_pose_est)
 
-    # # Compute Average Runtimes
-    # if tracking_iter_time_count == 0:
-    #     tracking_iter_time_count = 1
-    #     tracking_frame_time_count = 1
-    # if mapping_iter_time_count == 0:
-    #     mapping_iter_time_count = 1
-    #     mapping_frame_time_count = 1
-    # tracking_iter_time_avg = tracking_iter_time_sum / tracking_iter_time_count
-    # tracking_frame_time_avg = tracking_frame_time_sum / tracking_frame_time_count
-    # mapping_iter_time_avg = mapping_iter_time_sum / mapping_iter_time_count
-    # mapping_frame_time_avg = mapping_frame_time_sum / mapping_frame_time_count
-    # print(f"\nAverage Tracking/Iteration Time: {tracking_iter_time_avg*1000} ms")
-    # print(f"Average Tracking/Frame Time: {tracking_frame_time_avg} s")
-    # print(f"Average Mapping/Iteration Time: {mapping_iter_time_avg*1000} ms")
-    # print(f"Average Mapping/Frame Time: {mapping_frame_time_avg} s")
-    # if config['use_wandb']:
-    #     wandb_run.log({"Final Stats/Average Tracking Iteration Time (ms)": tracking_iter_time_avg*1000,
-    #                    "Final Stats/Average Tracking Frame Time (s)": tracking_frame_time_avg,
-    #                    "Final Stats/Average Mapping Iteration Time (ms)": mapping_iter_time_avg*1000,
-    #                    "Final Stats/Average Mapping Frame Time (s)": mapping_frame_time_avg,
-    #                    "Final Stats/step": 1})
+        Lnet_pose_est = np.load(f"./pcd_save/{config['run_name']}/Lnet_est_pose_00.npy")
+        Lnet_pose_est = torch.tensor(Lnet_pose_est).to('cuda').float()
+        for idx in range(len(Lnet_pose_est)):
+            params_est['cam_unnorm_rots'][..., idx] = Lnet_pose_est[idx, 3:]
+            params_est['cam_trans'][..., idx] = Lnet_pose_est[idx, :3]
 
-    # Evaluate Final Parameters
-    with torch.no_grad():
-        if config['use_wandb']:
-            eval(dataset, params, num_frames, eval_dir, sil_thres=config['mapping']['sil_thres'],
-                 wandb_run=wandb_run, wandb_save_qual=config['wandb']['eval_save_qual'],
-                 mapping_iters=config['mapping']['num_iters'], add_new_gaussians=config['mapping']['add_new_gaussians'],
-                 eval_every=config['eval_every'])
-        else:
-            eval(dataset, params, num_frames, eval_dir, sil_thres=config['mapping']['sil_thres'],
-                 mapping_iters=config['mapping']['num_iters'], add_new_gaussians=config['mapping']['add_new_gaussians'],
-                 eval_every=config['eval_every'])
+        # Evaluate Final PSNR
+        with torch.no_grad():
+            initial_psnr = eval_psnr(dataset, params_init, num_frames, eval_dir, sil_thres=config['mapping']['sil_thres'], mapping_iters=config['mapping']['num_iters'], add_new_gaussians=config['mapping']['add_new_gaussians'], eval_every=config['eval_every'], group_matrix=full_group_matrix[:, :num_group])
+            estimate_psnr =  eval_psnr(dataset, params_est, num_frames, eval_dir, sil_thres=config['mapping']['sil_thres'], mapping_iters=config['mapping']['num_iters'], add_new_gaussians=config['mapping']['add_new_gaussians'], eval_every=config['eval_every'], group_matrix=full_group_matrix[:, :num_group])
+            fig, ax = plt.subplots()
+            ax.plot(range(len(initial_psnr)), initial_psnr, color='b', label='Initial poses')
+            ax.plot(range(len(estimate_psnr)), estimate_psnr, color='g', label='Estimated poses')
+            ax.set_title("Local-PSNR")
+            ax.set_xlabel("Frame")
+            ax.set_ylabel("PSNR")
+            ax.legend()
+            save_path = os.path.join("./pcd_save", config['run_name'], "local_psnr.png")
+            fig.savefig(save_path)
+            plt.close()
 
-    # Add Camera Parameters to Save them
-    params['timestep'] = variables['timestep']
-    params['intrinsics'] = intrinsics.detach().cpu().numpy()
-    params['w2c'] = first_frame_w2c.detach().cpu().numpy()
-    params['org_width'] = dataset_config["desired_image_width"]
-    params['org_height'] = dataset_config["desired_image_height"]
-    params['gt_w2c_all_frames'] = []
-    for gt_w2c_tensor in gt_w2c_all_frames:
-        params['gt_w2c_all_frames'].append(gt_w2c_tensor.detach().cpu().numpy())
-    params['gt_w2c_all_frames'] = np.stack(params['gt_w2c_all_frames'], axis=0)
-    params['keyframe_time_indices'] = np.array(keyframe_time_indices)
+    # with torch.no_grad():
+    #     if config['use_wandb']:
+    #         eval(dataset, params, num_frames, eval_dir, sil_thres=config['mapping']['sil_thres'],
+    #              wandb_run=wandb_run, wandb_save_qual=config['wandb']['eval_save_qual'],
+    #              mapping_iters=config['mapping']['num_iters'], add_new_gaussians=config['mapping']['add_new_gaussians'],
+    #              eval_every=config['eval_every'], group_matrix=group_matrix)
+    #     else:
+    #         eval(dataset, params, num_frames, eval_dir, sil_thres=config['mapping']['sil_thres'],
+    #              mapping_iters=config['mapping']['num_iters'], add_new_gaussians=config['mapping']['add_new_gaussians'],
+    #              eval_every=config['eval_every'], group_matrix=group_matrix)
+
+    # # Add Camera Parameters to Save them
+    # params['timestep'] = variables['timestep']
+    # params['intrinsics'] = intrinsics.detach().cpu().numpy()
+    # params['w2c'] = first_frame_w2c.detach().cpu().numpy()
+    # params['org_width'] = dataset_config["desired_image_width"]
+    # params['org_height'] = dataset_config["desired_image_height"]
+    # params['gt_w2c_all_frames'] = []
+    # for gt_w2c_tensor in gt_w2c_all_frames:
+    #     params['gt_w2c_all_frames'].append(gt_w2c_tensor.detach().cpu().numpy())
+    # params['gt_w2c_all_frames'] = np.stack(params['gt_w2c_all_frames'], axis=0)
+    # params['keyframe_time_indices'] = np.array(keyframe_time_indices)
     
-    # Save Parameters
-    output_dir = os.path.join('./pcd_save', config['run_name'])
-    save_params(params, output_dir)
+    # # Save Parameters
+    # output_dir = os.path.join('./pcd_save', config['run_name'])
+    # save_params(params, output_dir)
 
-    # Close WandB Run
-    if config['use_wandb']:
-        wandb.finish()
+    # # Close WandB Run
+    # if config['use_wandb']:
+    #     wandb.finish()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -1,20 +1,21 @@
 import os
 from os.path import join as p_join
 
-scenes = ["apartment"]
+scenes = ["room0", "room1", "room2",
+          "office0", "office1", "office2",
+          "office_", "office4"]
 
 primary_device="cuda:0"
 seed = 0
 scene_name = scenes[0]
 
-set_num_frames = 2519
 map_every = 1
 keyframe_every = 5
-mapping_window_size = 32
-tracking_iters = 60
+mapping_window_size = 24
+tracking_iters = 40
 mapping_iters = 60
 
-group_name = "Apartment"
+group_name = "Replica"
 run_name = f"{scene_name}_{seed}"
 
 config = dict(
@@ -25,35 +26,37 @@ config = dict(
     map_every=map_every, # Mapping every nth frame
     keyframe_every=keyframe_every, # Keyframe every nth frame
     mapping_window_size=mapping_window_size, # Mapping window size
-    report_global_progress_every=10, # Report Global Progress every nth frame
+    report_global_progress_every=100, # Report Global Progress every nth frame
     eval_every=5, # Evaluate every nth frame (at end of SLAM)
     scene_radius_depth_ratio=3, # Max First Frame Depth to Scene Radius Ratio (For Pruning/Densification)
     mean_sq_dist_method="projective", # ["projective", "knn"] (Type of Mean Squared Distance Calculation for Scale of Gaussians)
-    report_iter_progress=False,
+    report_iter_progress=True,
     load_checkpoint=True,
-    checkpoint_time_idx=0,
+    checkpoint_time_idx=2000,
     save_checkpoints=True, # Save Checkpoints
     checkpoint_interval=100, # Checkpoint Interval
-    use_wandb=True,
+    mode='train',
+    track = True,
+    GSupdate = False,
+    use_wandb=False,
     wandb=dict(
         entity="scarick_visualization",
-        project="Splatam",
+        project="DeepGaussian",
         group=group_name,
         name=run_name,
         save_qual=False,
         eval_save_qual=True,
     ),
     data=dict(
-        basedir="./data/Apartment",
-        gradslam_data_cfg="./configs/data/apartment.yaml",
+        basedir="./data/Replica",
+        gradslam_data_cfg="./configs/data/replica.yaml",
         sequence=scene_name,
-        desired_image_height=720,
-        desired_image_width=1280,
+        desired_image_height=680,
+        desired_image_width=1200,
         start=0,
         end=-1,
         stride=1,
-        # num_frames=-1,
-        num_frames=set_num_frames,
+        num_frames= 2000,
     ),
     tracking=dict(
         use_gt_poses=False, # Use GT Poses for Tracking
@@ -62,25 +65,27 @@ config = dict(
         use_sil_for_loss=True,
         visualize_tracking_loss=False,
         sil_thres=0.99,
+        # sil_thres=0.00,
         use_l1=True,
         ignore_outlier_depth_loss=False,
         loss_weights=dict(
             im=0.5,
             depth=1.0,
         ),
+        lr=1e-5,
         lrs=dict(
             means3D=0.0,
             rgb_colors=0.0,
             unnorm_rotations=0.0,
             logit_opacities=0.0,
             log_scales=0.0,
-            cam_unnorm_rots=0.001,
-            cam_trans=0.004,
+            cam_unnorm_rots=0.0004,
+            cam_trans=0.002,
         ),
     ),
     mapping=dict(
         num_iters=mapping_iters,
-        add_new_gaussians=True,
+        add_new_gaussians=False,
         sil_thres=0.5, # For Addition of new Gaussians
         use_l1=True,
         use_sil_for_loss=False,
@@ -98,29 +103,28 @@ config = dict(
             cam_unnorm_rots=0.0000,
             cam_trans=0.0000,
         ),
-        prune_gaussians=True, # Prune Gaussians during Mapping
+        prune_gaussians=False, # Prune Gaussians during Mapping
         pruning_dict=dict( # Needs to be updated based on the number of mapping iterations
             start_after=0,
             remove_big_after=0,
-            stop_after=20,
+            stop_after=60,
             prune_every=20,
             removal_opacity_threshold=0.005,
             final_removal_opacity_threshold=0.005,
             reset_opacities=False,
             reset_opacities_every=500, # Doesn't consider iter 0
         ),
-        use_gaussian_splatting_densification=False, # Use Gaussian Splatting-based Densification during Mapping
+        use_gaussian_splatting_densification=True, # Use Gaussian Splatting-based Densification during Mapping
         densify_dict=dict( # Needs to be updated based on the number of mapping iterations
-            start_after=500,
-            remove_big_after=3000,
-            stop_after=75000,
-            densify_every=100,
+            start_after=0,
+            remove_big_after=0,
+            stop_after=100,
+            densify_every=1,
             grad_thresh=0.0002,
-            num_to_split_into=2,  # 2
-            removal_opacity_threshold=0.005, # 0.005
+            num_to_split_into=2,
+            removal_opacity_threshold=0.005,
             final_removal_opacity_threshold=0.005,
-            reset_opacities=True,
-            reset_opacities_every=3000, # Doesn't consider iter 0
+            reset_opacities_every=100, # Doesn't consider iter 0
         ),
     ),
     viz=dict(
