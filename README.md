@@ -42,7 +42,7 @@ python scripts/gaussian_splatting.py.py /configs/{dataset name}/post_splatam_opt
 **run DeepGS for training**  
 ```bash
  python scripts/splatam_test_copy.py configs/{dataset name}/DeepGS.py
-```    
+```     
 config `DeepGS.py` can be set like replica. Here are some attentions.  
 ```bash   
 mode='train',   # train mode for training, eval mode for evaluation
