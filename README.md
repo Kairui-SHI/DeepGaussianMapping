@@ -1,5 +1,5 @@
 This is a preview version for editing ...   
-**<u>The code is still in the debugging phase, and there are many details such as absolute paths and mode switches that need to be adjusted!</u>**
+<u>**The code is still in the debugging phase, and there are many details such as absolute paths and mode switches that need to be adjusted!**</u>
 
 
 ## Installation
