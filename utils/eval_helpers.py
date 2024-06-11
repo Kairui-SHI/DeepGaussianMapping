@@ -443,9 +443,9 @@ def eval_psnr(dataset, final_params, num_frames, eval_dir, sil_thres,
             # Setup Camera
             cam = setup_camera(color.shape[2], color.shape[1], intrinsics.cpu().numpy(), first_frame_w2c.detach().cpu().numpy())
         
-        # Skip frames if not eval_every
-        if time_idx != 0 and (time_idx+1) % eval_every != 0:
-            continue
+        # # Skip frames if not eval_every
+        # if time_idx != 0 and (time_idx+1) % eval_every != 0:
+        #     continue
 
         # Get current frame Gaussians
         transformed_gaussians = transform_to_frame(final_params, time_idx, 
@@ -491,15 +491,15 @@ def eval_psnr(dataset, final_params, num_frames, eval_dir, sil_thres,
     # draw local psnr plot
     if group_matrix is not None:
         local_psnr_list = []
-        for idx in tqdm(range(num_frames)):
-            # Skip frames if not eval_every
-            if time_idx != 0 and (time_idx+1) % eval_every != 0:
-                continue
+        for idx in tqdm(range(50, num_frames)):
+            # # Skip frames if not eval_every
+            # if time_idx != 0 and (time_idx+1) % eval_every != 0:
+            #     continue
 
-            local_psnr = psnr_list[int(group_matrix[idx, 0])]*2
-            for f_id in range(1, group_matrix.shape[1]):
-                local_psnr += psnr_list[int(group_matrix[idx, f_id])]
-            local_psnr = local_psnr / group_matrix.shape[1]
+            local_psnr = psnr_list[int(group_matrix[idx, 0])]
+            # for f_id in range(1, group_matrix.shape[1]):
+            #     local_psnr += psnr_list[int(group_matrix[idx, f_id])]
+            # local_psnr = local_psnr / (group_matrix.shape[1])
             local_psnr_list.append(local_psnr)
         return local_psnr_list
     else:
@@ -589,23 +589,6 @@ def eval(dataset, final_params, num_frames, eval_dir, sil_thres,
         psnr_list.append(psnr.cpu().numpy())
         ssim_list.append(ssim.cpu().numpy())
         lpips_list.append(lpips_score)
-
-        # draw local psnr plot
-        if group_matrix is not None:
-            local_psnr_list = []
-            for idx in range(len(num_frames)):
-                local_psnr = psnr_list[group_matrix[idx, 0]]*2
-                for f_id in range(1, group_matrix.shape[1]):
-                    local_psnr += psnr_list[group_matrix[idx, f_id]]
-                local_psnr = local_psnr / group_matrix.shape[1]
-                local_psnr_list.append(local_psnr)
-            plt.figure()
-            plt.plot(local_psnr_list)
-            plt.title("Local-PSNR")
-            plt.xlabel("Frame")
-            plt.ylabel("PSNR")
-            plt.savefig(os.path.join(plot_dir, "local_psnr.png"))
-            plt.close()
 
         # Compute Depth RMSE
         if mapping_iters==0 and not add_new_gaussians:

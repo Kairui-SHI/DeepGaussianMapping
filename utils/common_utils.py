@@ -41,6 +41,14 @@ def save_params(output_params, output_dir):
     save_path = os.path.join(output_dir, "params.npz")
     np.savez(save_path, **to_save)
 
+def save_update_params(output_params, output_dir, epoch=0):
+    # Convert to CPU Numpy Arrays
+    to_save = params2cpu(output_params)
+    # Save the Parameters containing the Gaussian Trajectories
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Saving parameters to: {output_dir}")
+    save_path = os.path.join(output_dir, f"update_params_{epoch}.npz")
+    np.savez(save_path, **to_save)
 
 def save_params_ckpt(output_params, output_dir, time_idx):
     # Convert to CPU Numpy Arrays

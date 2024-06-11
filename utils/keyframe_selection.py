@@ -37,7 +37,7 @@ def get_pointcloud(depth, intrinsics, w2c, sampled_indices):
     return pts
 
 
-def keyframe_selection_overlap(gt_depth, w2c, intrinsics, keyframe_list, k, pixels=1600):
+def keyframe_selection_overlap(gt_depth, w2c, intrinsics, keyframe_list, k, pixels=None):
         """
         Select overlapping keyframes to the current camera observation.
 
@@ -55,8 +55,11 @@ def keyframe_selection_overlap(gt_depth, w2c, intrinsics, keyframe_list, k, pixe
         width, height = gt_depth.shape[2], gt_depth.shape[1]
         valid_depth_indices = torch.where(gt_depth[0] > 0)
         valid_depth_indices = torch.stack(valid_depth_indices, dim=1)
-        indices = torch.randint(valid_depth_indices.shape[0], (pixels,))
-        sampled_indices = valid_depth_indices[indices]
+        if pixels == None:
+            sampled_indices = valid_depth_indices
+        else:
+            indices = torch.randint(valid_depth_indices.shape[0], (pixels,))
+            sampled_indices = valid_depth_indices[indices]
 
         # Back Project the selected pixels to 3D Pointcloud
         pts = get_pointcloud(gt_depth, intrinsics, w2c, sampled_indices)
@@ -75,14 +78,14 @@ def keyframe_selection_overlap(gt_depth, w2c, intrinsics, keyframe_list, k, pixe
             points_2d = points_2d / points_z
             projected_pts = points_2d[:, :2]
             # Filter out the points that are outside the image
-            edge = 20
+            edge = 0
             mask = (projected_pts[:, 0] < width-edge)*(projected_pts[:, 0] > edge) * \
                 (projected_pts[:, 1] < height-edge)*(projected_pts[:, 1] > edge)
             mask = mask & (points_z[:, 0] > 0)
             # Compute the percentage of points that are inside the image
             percent_inside = mask.sum()/projected_pts.shape[0]
             list_keyframe.append(
-                {'id': keyframeid, 'percent_inside': percent_inside})
+                {'id': keyframe['id'], 'percent_inside': percent_inside})
 
         # Sort the keyframes based on the percentage of points that are inside the image
         list_keyframe = sorted(
@@ -93,7 +96,9 @@ def keyframe_selection_overlap(gt_depth, w2c, intrinsics, keyframe_list, k, pixe
         selected_keyframe_list = [keyframe_dict['id']
                           for keyframe_dict in list_keyframe if keyframe_dict['id'] != id] #this line changed
 
-        selected_keyframe_list = list(np.random.permutation(
-            np.array(selected_keyframe_list))[:k])
+        # selected_keyframe_list = list(np.random.permutation(
+        #     np.array(selected_keyframe_list))[:k])
+
+        selected_keyframe_list = list(np.array(selected_keyframe_list)[:k])
 
         return selected_keyframe_list

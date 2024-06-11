@@ -3,6 +3,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from networks import LocNetRegKITTI, MLP
 from utils.geometry_utils import transform_to_global_KITTI, compose_pose_diff, euler_pose_to_quaternion,quaternion_to_euler_pose, qmul_torch
 from utils.slam_helpers import (
@@ -12,8 +13,6 @@ from utils.slam_helpers import (
 from utils.slam_external import calc_ssim, build_rotation, prune_gaussians, densify
 from diff_gaussian_rasterization import GaussianRasterizer as Renderer
 from init_pose import w2c_to_c2w
-from utils.group_matrix_generate import distance_cal
-from utils.vis_2dpose import vis_pcd
 
 def get_loss(params, curr_data, iter_time_idx, loss_weights, use_sil_for_loss,
              sil_thres, use_l1, ignore_outlier_depth_loss, tracking = True):
@@ -136,63 +135,71 @@ class DeepMapping2(nn.Module):
         # pose_est= G*7 -> params
         self.params = {k: v.clone() for k, v in params.items()}
         for i in range(len(group_matrix)):
-            self.params['cam_unnorm_rots'][..., group_matrix[i]] = self.pose_est[i, 3:].float() #quaternion_rot 1*4
+            self.params['cam_unnorm_rots'][..., group_matrix[i]] =self.pose_est[i, 3:].float() #quaternion_rot 1*4
             self.params['cam_trans'][..., group_matrix[i]] = self.pose_est[i, :3].float() #quaternion_tran 1*3
 
         # if not self.training:
-        #     self.pose_est = self.pose_est[0].float()
-        #     rel_w2c = group_data[0]['iter_gt_w2c_list'][-1]
-        #     rel_w2c_rot = rel_w2c[:3, :3].unsqueeze(0)
-        #     rel_w2c_rot_quat = matrix_to_quaternion(rel_w2c_rot)
-        #     rel_w2c_tran = rel_w2c[:3, 3].detach()
-        #     params_gt = {k: v.clone() for k, v in params.items()}
-        #     params_gt['cam_unnorm_rots'][..., group_matrix[0]] = rel_w2c_rot_quat.float() #quaternion_rot 1*4
-        #     params_gt['cam_trans'][..., group_matrix[0]] = rel_w2c_tran.float() #quaternion_tran 1*3
+        #     self.pose_est = self.pose_est
+            # rel_w2c = group_data[0]['iter_gt_w2c_list'][-1]
+            # rel_w2c_rot = rel_w2c[:3, :3].unsqueeze(0)
+            # rel_w2c_rot_quat = matrix_to_quaternion(rel_w2c_rot)
+            # rel_w2c_tran = rel_w2c[:3, 3].detach()
+            # params_gt = {k: v.clone() for k, v in params.items()}
+            # params_gt['cam_unnorm_rots'][..., group_matrix[0]] = rel_w2c_rot_quat.float() #quaternion_rot 1*4
+            # params_gt['cam_trans'][..., group_matrix[0]] = rel_w2c_tran.float() #quaternion_tran 1*3
 
-        #     loss_est = get_loss(self.params_est, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
-        #     loss = get_loss(params, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
-        #     loss_gt = get_loss(params_gt, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
-        #     print(loss_est)
-        #     print(loss)
-        #     print(loss_gt)
-        #     # return loss_est, loss
+            # loss_est = get_loss(self.params_est, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+            # loss = get_loss(params, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+            # loss_gt = get_loss(params_gt, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+            # print(loss_est)
+            # print(loss)
+            # print(loss_gt)
+            # return loss_est, loss
 
         if self.training: # Get Loss: Gaussians  
             loss = 0
-            loss_ = []
-            # for i in range(len(group_matrix)):
-            for i in range(len(group_matrix)):
-                loss = get_loss(self.params, group_data[i], group_matrix[i], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
-                loss_.append(loss)
-                # torch.cuda.empty_cache()
-            loss = (sum(loss_)/len(group_matrix))
+            loss = get_loss(self.params, group_data[i], group_matrix[i], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+            loss = loss*0.1
             print(loss)
+
             if params_init is not None:
-                loss_init = get_loss(params_init, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+                loss_init = get_loss(params, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+                loss_init = loss_init*1e-1
                 print(loss_init)
+            # rel_w2c = group_data[0]['iter_gt_w2c_list'][-1]
+            # rel_w2c_rot = rel_w2c[:3, :3].unsqueeze(0)
+            # rel_w2c_rot_quat = matrix_to_quaternion(rel_w2c_rot)
+            # rel_w2c_tran = rel_w2c[:3, 3].detach()
+            # params_gt = {k: v.clone() for k, v in params.items()}
+            # params_gt['cam_unnorm_rots'][..., group_matrix[0]] = rel_w2c_rot_quat.float() #quaternion_rot 1*4
+            # params_gt['cam_trans'][..., group_matrix[0]] = rel_w2c_tran.float() #quaternion_tran 1*3
+            # loss_gt = get_loss(params_gt, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+            # print(loss_gt)
 
-            # threshold = 0.1
-            loss_init_ = []
+            threshold = 0.1
+            loss_pose_ = []
             for i in range(len(group_matrix)):
-                distance = torch.abs(sensor_pose[i, :3] - self.pose_est[i, :3]).sum()# + torch.abs(sensor_pose[i, 3:] - self.pose_est[i, 3:]).sum()
+                distanceT = torch.abs(sensor_pose[i, :3] - self.pose_est[i, :3]).sum()
+                distanceR = torch.abs(F.normalize(sensor_pose[i, 3:].unsqueeze(0)) - F.normalize(self.pose_est[i, 3:].unsqueeze(0))).sum()
+                distance = distanceT + distanceR
+                print(distanceT, distanceR)
                 # distance = distance_cal(self.pose_est[i], sensor_pose[i])
-                loss_init_.append(distance)
-            loss_init = sum(loss_init_) / len(loss_init_)
-            loss_init = loss_init # only consider the init_pose
-            print(loss_init)
+                loss_pose_.append(distance)
+            loss_pose = sum(loss_pose_) / len(loss_pose_)
+            print(loss_pose)
 
-            # if loss_init < threshold:
-            #     print('\033[91m' + 'init_pose track!' + '\033[0m')
-            #     loss = loss #+ loss_init*1e5
-            #     flag = 1
-            # elif loss_init > threshold:
-            #     # loss = loss + loss_init*1e5
-            #     loss = loss_init*1e6
-            #     flag = 0
+            if loss_pose < threshold:
+                # print('\033[91m' + 'init_pose track!' + '\033[0m')
+                loss = loss #+ distanceR*1e6
+                flag = 1
+            elif loss_pose > threshold:
+                loss = loss + loss_pose*1e5
+                # loss = loss_pose*1e5
+                flag = 0
 
-            # latter-train
-            flag = 1
-            loss = loss
+            # # latter-train
+            # flag = 1
+            # loss = loss #+ loss_pose*1e5
 
             return loss_init, flag, loss
 

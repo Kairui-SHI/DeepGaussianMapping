@@ -851,6 +851,7 @@ def rgbd_slam(config: dict):
                     # Report Loss
                     wandb_mapping_step = report_loss(losses, wandb_run, wandb_mapping_step, mapping=True)
                 # Backprop
+                print(loss)
                 loss.backward()
                 with torch.no_grad():
                     # Prune Gaussians

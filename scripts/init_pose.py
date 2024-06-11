@@ -146,13 +146,21 @@ def reference_trans(location):
 
     return reference_trans_pose
 
-# location = np.load("/mnt/massive/skr/SplaTAM/pcd_save/apartment_0/Lnet_est_pose_00.npy")
+# # # location = np.load("/mnt/massive/skr/SplaTAM/pcd_save/apartment_0/Lnet_est_pose_00.npy")
+# location = np.load("./pcd_save/room0_0/GSsetup_Lnet_est_pose_eval.npy")
+# # location = np.loadtxt("/mnt/massive/skr/SplaTAM/pcd_save/room0_0/gt_all_frames.txt")
+# # # Initial_pose = np.load("/mnt/massive/skr/SplaTAM/pcd_save/room0_0/Initial_pose.npy")
 # location = torch.from_numpy(location)
-# location = w2c_to_c2w(location)
+# # # # Initial_pose = torch.from_numpy(Initial_pose)
+# # location = w2c_to_c2w(location)
+# # # # Initial_pose = w2c_to_c2w(Initial_pose)
 # location = reference_trans(location)
-# print(location[0])
-# np.save("/mnt/massive/skr/SplaTAM/pcd_save/apartment_0/reference_trans_pose_00.npy", location)
+# np.save("/mnt/massive/skr/SplaTAM/pcd_save/room0_0/GSsetup_Lnet_est_pose_eval_reference.npy", location)
 
-# params = np.load('/mnt/massive/skr/SplaTAM/experiments/Apartment/Post_SplaTAM_Opt/params.npz', allow_pickle=True)
-# print(params)
-# print(params.files)
+# # params = np.load('/mnt/massive/skr/SplaTAM/experiments/Apartment/Post_SplaTAM_Opt/params.npz', allow_pickle=True)
+# # print(params)
+# # print(params.files)
+
+
+# gt_pose = np.load(f"./pcd_save/room0_0/gt_all_frames_c2w.npy")
+# print(gt_pose)
