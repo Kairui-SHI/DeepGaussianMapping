@@ -1,5 +1,5 @@
 This is a preview version for editing ...   
-<u>**The code is still in the debugging phase, and there are many details such as absolute paths and mode switches that need to be adjusted!**</u>
+++**The code is still in the debugging phase, and there are many details such as absolute paths and mode switches that need to be adjusted!**++
 
 
 ## Installation
@@ -13,9 +13,9 @@ pip install -r requirements.txt
 
 ## Prepare for Datasets  
 Download the data as below, and the data will be saved into the ./data/Replica folder.  
-'''bash
+```bash
 bash bash_scripts/download_replica.sh  
-'''
+```
 If you download dataset by yourself, please collect data in SplaTAM format, including './congfigs' and './datasets/'.  
 
 For details on how to obtain prepared dataset and the format of the dataset, see SplaTAM:    
