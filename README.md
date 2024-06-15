@@ -68,4 +68,9 @@ if (mode == 'train'):
         model.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
 ``` 
-and add them later after you train models.
+and add them later after you train models.  
+**evaluation**  
+run evaluate python script to evaluate results by MME and APE two methods  
+```bash
+python utils/evaluate.py
+```
