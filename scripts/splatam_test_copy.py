@@ -39,7 +39,6 @@ from utils.slam_external import calc_ssim, build_rotation, prune_gaussians
 from utils.gs_external import (
     densify, get_expon_lr_func, update_learning_rate
 )
-# from utils.group_matrix_generate import group_matrix_generate
 from utils.geometry_utils import transform_to_global_KITTI
 from utils.vis_2dpose import plot_global_pose
 
@@ -56,6 +55,7 @@ import loss
 from loss import *
 from deepmapping import DeepMapping2
 from init_pose import Lnet2pose, w2c_to_c2w
+from group_matrix_generate import group_matrix_generate
 
 def get_dataset(config_dict, basedir, sequence, **kwargs):
     if config_dict["dataset_name"].lower() in ["icl"]:
@@ -764,7 +764,7 @@ def rgbd_slam(config: dict):
     model = DeepMapping2(n_points=max_num_pcd, rotation_representation='quaternion', device=device).to(device)
     optimizer = optim.Adam(model.parameters(),lr=1e-4)
     scaler = torch.cuda.amp.GradScaler()
-    n_epochs = 1000
+    n_epochs = 50
     num_group = 1
     mode = config['mode']
     track = config['track']
@@ -777,11 +777,10 @@ def rgbd_slam(config: dict):
 
     print('generate group matrix ...')
     # full_group_matrix = group_matrix_generate(params, num_frames)
-    # # Save as npy
-    # np.save(f"./pcd_save/{config['run_name']}/full_group_matrix_2519.npy", full_group_matrix)
+    # np.save(f"./pcd_save/{config['run_name']}/full_group_matrix.npy", full_group_matrix)
     full_group_matrix = np.zeros((num_frames, 20))
-    full_group_matrix = np.load(f"./pcd_save/{config['run_name']}/Group_list.npy")
-    # full_group_matrix = np.load(f"./pcd_save/{config['run_name']}/full_group_matrix_2519.npy")
+    full_group_matrix = np.load(f"./pcd_save/{config['run_name']}/Group_list_2000.npy")
+    # full_group_matrix = np.load(f"./pcd_save/{config['run_name']}/full_group_matrix.npy")
     print('full_group_matrix:', full_group_matrix.shape)
 
 
@@ -792,7 +791,7 @@ def rgbd_slam(config: dict):
         save_dir = os.path.join('./pcd_save', config['run_name'], f"GSsetup_best_model.pth")
         checkpoint = torch.load(save_dir)
         model.load_state_dict(checkpoint['state_dict'])
-        # optimizer.load_state_dict(checkpoint['optimizer'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
     elif (mode == 'eval'):
         print('load model')
         save_dir = os.path.join('./pcd_save', config['run_name'], f"GSsetup_best_model.pth")
@@ -800,13 +799,13 @@ def rgbd_slam(config: dict):
         model.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
 
-    Initial_pose = []
+    initial_pose = []
     for idx in range(num_frames):
                 pose = torch.cat((params['cam_trans'][..., idx], params['cam_unnorm_rots'][..., idx]), dim=1).reshape(1, 7).squeeze(0)
-                Initial_pose.append(pose)
-    Initial_pose = torch.stack(Initial_pose)
-    Initial_pose = w2c_to_c2w(Initial_pose).detach().cpu().numpy() # trans initial pose to c2w
-    np.save(f"./pcd_save/{config['run_name']}/Initial_pose.npy", Initial_pose)
+                initial_pose.append(pose)
+    initial_pose = torch.stack(initial_pose)
+    initial_pose = w2c_to_c2w(initial_pose).detach().cpu().numpy() # trans initial pose to c2w
+    np.save(f"./pcd_save/{config['run_name']}/initial_pose.npy", initial_pose)
 
     # Iterate over Scan
     if mode == 'train':
@@ -815,8 +814,8 @@ def rgbd_slam(config: dict):
                 Lnet_pose_est = []
                 for time_idx in tqdm(range(num_frames)):
                     # setup_GS_per_iter
-                    if setdate_GS_per_iter:
-                        num_iters_mapping = 150
+                    if setdate_GS_per_iter and epoch != 0:
+                        num_iters_mapping = 100
                         GSnum_group = 10
                         selected_keyframes = full_group_matrix[time_idx, :GSnum_group].astype(int)
                         # initial 3DGS-params
@@ -998,9 +997,9 @@ def rgbd_slam(config: dict):
                 print('Est_poses saved to {}'.format(save_est_dir))
                 # draw traj.
                 Lnet_est_pose = np.load(f"./pcd_save/{config['run_name']}/GSsetup_Lnet_est_pose.npy")
-                Initial_pose = np.load(f"./pcd_save/{config['run_name']}/Initial_pose.npy")
+                initial_pose = np.load(f"./pcd_save/{config['run_name']}/initial_pose.npy")
                 # gt_pose = np.load(f"./pcd_save/{config['run_name']}/gt_all_frames_c2w.npy")
-                plot_global_pose(Lnet_est_pose, output_dir=f"./results/{config['run_name']}", Init_location=Initial_pose, gt_location=None)
+                plot_global_pose(Lnet_est_pose, output_dir=f"./results/{config['run_name']}", Init_location=initial_pose, gt_location=None)
 
                 # Save Parameters
                 output_dir = os.path.join('./pcd_save', config['run_name'])
@@ -1014,8 +1013,7 @@ def rgbd_slam(config: dict):
             for idx in range(50, len(Lnet_pose_est)):
                 params_est['cam_unnorm_rots'][..., idx] = Lnet_pose_est[idx, 3:]
                 params_est['cam_trans'][..., idx] = Lnet_pose_est[idx, :3]
-           
-           
+
             for epoch in range(5):
                 # for time_idx in tqdm(range(num_frames)):
                 #     # Load RGBD frames incrementally instead of all frames
@@ -1343,9 +1341,9 @@ def rgbd_slam(config: dict):
         pcd_gt = o3d.geometry.PointCloud()
         pcd_est = o3d.geometry.PointCloud()
         pcd_temp = o3d.geometry.PointCloud()
-        Lnet_pose = np.load(f"./pcd_save/{config['run_name']}/GSsetup_Lnet_est_pose_eval.npy")
-        # gt_pose = np.load("./pcd_save/replica/pcd/gt_pose.npy")
-        # init_pose = np.load("./pcd_save/replica/prior/init_pose.npy")
+        # Lnet_pose = np.load(f"./pcd_save/{config['run_name']}/GSsetup_Lnet_est_pose_eval.npy")
+        gt_pose = np.load(f"./pcd_save/{config['run_name']}/gt_all_frames_c2w.npy")
+        init_pose = np.load(f"./pcd_save/{config['run_name']}/init_pose.npy")
         for test_time_idx in tqdm(range(0, num_frames)):
             # TODO: L-net Gaussian method:
             temp_pcd = []
@@ -1356,9 +1354,9 @@ def rgbd_slam(config: dict):
             for idx in range(len(group_matrix)):
                 # Load RGBD frames incrementally instead of all frames
                 frame_id = group_matrix[idx]
-                color, depth, _, gt_pose = dataset[frame_id]
+                color, depth, _, gt_iter_pose = dataset[frame_id]
                 # Process poses
-                gt_w2c = torch.linalg.inv(gt_pose)
+                gt_w2c = torch.linalg.inv(gt_iter_pose)
                 # Process RGB-D Data
                 color = color.permute(2, 0, 1) / 255
                 depth = depth.permute(2, 0, 1)
@@ -1381,33 +1379,35 @@ def rgbd_slam(config: dict):
             obs_local = torch.from_numpy(np.stack(obs_local)).float().to(device)
             # print(obs_local.shape)
 
-            # with torch.no_grad():
-            #     model.eval()
-            #     model(obs_local, params_init, group_matrix=group_matrix, group_data=group_data)
-            #     pose_est = model.pose_est
-            #     Lnet_pose_est.append(pose_est[0])
-            #     # params_est['cam_unnorm_rots'][..., test_time_idx] = est_pose[3:]
-            #     # params_est['cam_trans'][..., test_time_idx] = est_pose[:3]
-            #     print(Lnet_pose_est[-1])
+            with torch.no_grad():
+                model.eval()
+                model(obs_local, params_init, group_matrix=group_matrix, group_data=group_data)
+                pose_est = model.pose_est
+                Lnet_pose_est.append(pose_est[0])
+                # params_est['cam_unnorm_rots'][..., test_time_idx] = est_pose[3:]
+                # params_est['cam_trans'][..., test_time_idx] = est_pose[:3]
+                print(Lnet_pose_est[-1])
 
-            # # save init pcd ...
-            # pose = torch.tensor(init_pose[test_time_idx]).to('cuda').unsqueeze(0)
-            # obs_global_est = transform_to_global_KITTI(pose, true_pcd, 'quaternion')
-            # obs_global_est = np.squeeze(obs_global_est.cpu().detach().numpy())
-            # pcd_temp.points = o3d.utility.Vector3dVector(obs_global_est)
-            # # pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.05)
-            # pcd_init += pcd_temp
+            # save init pcd ...
+            pose = torch.tensor(init_pose[test_time_idx]).to('cuda').unsqueeze(0)
+            obs_global_est = transform_to_global_KITTI(pose, true_pcd, 'quaternion')
+            obs_global_est = np.squeeze(obs_global_est.cpu().detach().numpy())
+            pcd_temp.points = o3d.utility.Vector3dVector(obs_global_est)
+            # pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.05)
+            pcd_init += pcd_temp
 
-            # # save gt pcd ...
-            # pose = torch.tensor(gt_pose[test_time_idx]).to('cuda').unsqueeze(0)
-            # obs_global_est = transform_to_global_KITTI(pose, true_pcd, 'quaternion')
-            # obs_global_est = np.squeeze(obs_global_est.cpu().detach().numpy())
-            # pcd_temp.points = o3d.utility.Vector3dVector(obs_global_est)
-            # # pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.05)
-            # pcd_gt += pcd_temp
+            # save gt pcd ...
+            pose = torch.tensor(gt_pose[test_time_idx]).to('cuda').unsqueeze(0)
+            obs_global_est = transform_to_global_KITTI(pose, true_pcd, 'quaternion')
+            obs_global_est = np.squeeze(obs_global_est.cpu().detach().numpy())
+            pcd_temp.points = o3d.utility.Vector3dVector(obs_global_est)
+            # pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.05)
+            pcd_gt += pcd_temp
 
             # save est pcd ...
-            pose = torch.tensor(Lnet_pose[test_time_idx]).to('cuda').unsqueeze(0)
+            # pose = torch.tensor(Lnet_pose[test_time_idx]).to('cuda').unsqueeze(0)
+            pose = Lnet_pose_est[-1].unsqueeze(0)
+            pose = w2c_to_c2w(pose).to('cuda')
             obs_global_est = transform_to_global_KITTI(pose, true_pcd, 'quaternion')
             obs_global_est = np.squeeze(obs_global_est.cpu().detach().numpy())
             # print(obs_global_est.shape)
@@ -1415,9 +1415,9 @@ def rgbd_slam(config: dict):
             # pcd_temp = pcd_temp.voxel_down_sample(voxel_size=0.05)
             pcd_est += pcd_temp
 
-        # o3d.io.write_point_cloud('./pcd_save/init_pcd.ply', pcd_init)
-        o3d.io.write_point_cloud('./pcd_save/Lnet_pcd_est.ply', pcd_est)
-        # o3d.io.write_point_cloud('./pcd_save/gt_pcd.ply', pcd_gt)
+        o3d.io.write_point_cloud('./results/'+config['run_name']+'/init_pcd.ply', pcd_init)
+        o3d.io.write_point_cloud('./results/'+config['run_name']+'/Lnet_pcd_est.ply', pcd_est)
+        o3d.io.write_point_cloud('./results/'+config['run_name']+'/gt_pcd.ply', pcd_gt)
         # save Est_poses
         Lnet_pose_est = torch.stack(Lnet_pose_est)
         Lnet_pose_est = w2c_to_c2w(Lnet_pose_est).detach().cpu().numpy() # change w2c pose to c2w
@@ -1426,9 +1426,9 @@ def rgbd_slam(config: dict):
         print('Est_poses saved to {}'.format(save_est_dir))
         # draw traj.
         Lnet_est_pose = np.load(f"./pcd_save/{config['run_name']}/GSsetup_Lnet_est_pose_eval.npy")
-        Initial_pose = np.load(f"./pcd_save/{config['run_name']}/Initial_pose.npy")
+        initial_pose = np.load(f"./pcd_save/{config['run_name']}/initial_pose.npy")
         gt_pose = np.load(f"./pcd_save/{config['run_name']}/gt_all_frames_c2w.npy")
-        plot_global_pose(Lnet_est_pose, output_dir="./results/eval", Init_location=Initial_pose, gt_location=gt_pose)
+        plot_global_pose(Lnet_est_pose, output_dir=f"./results/{config['run_name']}/eval", Init_location=initial_pose, gt_location=gt_pose)
 
         # Lnet_pose_est = np.load(f"./pcd_save/{config['run_name']}/Lnet_est_pose_24.npy")
         # Lnet_pose_est = torch.tensor(Lnet_pose_est).to('cuda').float()

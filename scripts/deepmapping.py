@@ -14,22 +14,20 @@ from utils.slam_external import calc_ssim, build_rotation, prune_gaussians, dens
 from diff_gaussian_rasterization import GaussianRasterizer as Renderer
 from init_pose import w2c_to_c2w
 
-def get_loss(params, curr_data, iter_time_idx, loss_weights, use_sil_for_loss,
-             sil_thres, use_l1, ignore_outlier_depth_loss, tracking = True):
+def rendering_loss(params, curr_data, iter_time_idx, loss_weights, use_sil_for_loss,
+             sil_thres, use_l1, ignore_outlier_depth_loss, depth_weighted_bias = 0.5, tracking = True):
     # Initialize Loss Dictionary
     losses = {}
 
-    transformed_gaussians = transform_to_frame(params, iter_time_idx, gaussians_grad=False, camera_grad=True)
-
     # Initialize Render Variables
+    transformed_gaussians = transform_to_frame(params, iter_time_idx, gaussians_grad=False, camera_grad=True)
     rendervar = transformed_params2rendervar(params, transformed_gaussians)
     depth_sil_rendervar = transformed_params2depthplussilhouette(params, curr_data['w2c'], transformed_gaussians)
 
     # RGB Rendering
     rendervar['means2D'].retain_grad()
     im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
-    # variables['means2D'] = rendervar['means2D']  # Gradient only accum from colour render for densification
-
+    
     # Depth & Silhouette Rendering
     depth_sil, _, _, = Renderer(raster_settings=curr_data['cam'])(**depth_sil_rendervar)
     depth = depth_sil[0, :, :].unsqueeze(0)
@@ -52,13 +50,17 @@ def get_loss(params, curr_data, iter_time_idx, loss_weights, use_sil_for_loss,
     if tracking and use_sil_for_loss:
         mask = mask & presence_sil_mask
 
+    # Weighted Depth for far-near depth sensor error 
+    bias = depth_weighted_bias
+    depth_weighted = 1.0 / (curr_data['depth'] + bias)
+
     # Depth loss
     if use_l1:
         mask = mask.detach()
         if tracking:
-            losses['depth'] = torch.abs(curr_data['depth'] - depth)[mask].sum()
+            losses['depth'] = (torch.abs(curr_data['depth'] - depth)*depth_weighted)[mask].sum()
         else:
-            losses['depth'] = torch.abs(curr_data['depth'] - depth)[mask].mean()
+            losses['depth'] = (torch.abs(curr_data['depth'] - depth)*depth_weighted)[mask].mean()
     
     # RGB Loss
     # losses['im'] = torch.abs(curr_data['im'] - im).sum()
@@ -148,9 +150,9 @@ class DeepMapping2(nn.Module):
             # params_gt['cam_unnorm_rots'][..., group_matrix[0]] = rel_w2c_rot_quat.float() #quaternion_rot 1*4
             # params_gt['cam_trans'][..., group_matrix[0]] = rel_w2c_tran.float() #quaternion_tran 1*3
 
-            # loss_est = get_loss(self.params_est, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
-            # loss = get_loss(params, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
-            # loss_gt = get_loss(params_gt, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+            # loss_est = rendering_loss(self.params_est, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+            # loss = rendering_loss(params, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+            # loss_gt = rendering_loss(params_gt, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
             # print(loss_est)
             # print(loss)
             # print(loss_gt)
@@ -158,12 +160,12 @@ class DeepMapping2(nn.Module):
 
         if self.training: # Get Loss: Gaussians  
             loss = 0
-            loss = get_loss(self.params, group_data[i], group_matrix[i], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+            loss = rendering_loss(self.params, group_data[i], group_matrix[i], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False, depth_weighted_bias=0.5)
             loss = loss*0.1
             print(loss)
 
             if params_init is not None:
-                loss_init = get_loss(params, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+                loss_init = rendering_loss(params, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False, depth_weighted_bias=0.5)
                 loss_init = loss_init*1e-1
                 print(loss_init)
             # rel_w2c = group_data[0]['iter_gt_w2c_list'][-1]
@@ -173,10 +175,10 @@ class DeepMapping2(nn.Module):
             # params_gt = {k: v.clone() for k, v in params.items()}
             # params_gt['cam_unnorm_rots'][..., group_matrix[0]] = rel_w2c_rot_quat.float() #quaternion_rot 1*4
             # params_gt['cam_trans'][..., group_matrix[0]] = rel_w2c_tran.float() #quaternion_tran 1*3
-            # loss_gt = get_loss(params_gt, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False)
+            # loss_gt = rendering_loss(params_gt, group_data[0], group_matrix[0], loss_weights=dict(im=0.5,depth=1.0,), use_sil_for_loss=True, sil_thres=0.99, use_l1=True, ignore_outlier_depth_loss=False, depth_weighted_bias=0.5)
             # print(loss_gt)
 
-            threshold = 0.1
+            threshold = 0.2
             loss_pose_ = []
             for i in range(len(group_matrix)):
                 distanceT = torch.abs(sensor_pose[i, :3] - self.pose_est[i, :3]).sum()
